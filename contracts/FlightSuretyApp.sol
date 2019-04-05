@@ -24,7 +24,10 @@ contract FlightSuretyApp {
     uint8 private constant STATUS_CODE_LATE_TECHNICAL = 40;
     uint8 private constant STATUS_CODE_LATE_OTHER = 50;
 
+    
     address private contractOwner;          // Account used to deploy contract
+
+    FlightSuretyData flightSuretyData ;     // Access the Data contract
 
     struct Flight {
         bool isRegistered;
@@ -32,7 +35,17 @@ contract FlightSuretyApp {
         uint256 updatedTimestamp;        
         address airline;
     }
+
+    /* About Mapping in solidity
+    Mapping can be interpreted as sort of hash tables that are initialized virtually 
+    so that each potential key exists and is mapped to a value, whose byte-representation consists of zeroes only.
+    However, differently from hash tables, the key data is not stored in the mapping. 
+    Instead, only its kecak256 hash used for storing the value is.
+    Mapping types have to be declared using mapping(_KeyType => _ValueType).
+    */
     mapping(bytes32 => Flight) private flights;
+
+   
 
  
     /********************************************************************************************/
@@ -73,10 +86,12 @@ contract FlightSuretyApp {
     */
     constructor
                                 (
+                                    address dataContract
                                 ) 
                                 public 
     {
         contractOwner = msg.sender;
+        flightSuretyData = FlightSuretyData(dataContract);
     }
 
     /********************************************************************************************/
@@ -334,4 +349,20 @@ contract FlightSuretyApp {
 
 // endregion
 
-}   
+}  
+
+contract FlightSuretyData {
+
+    function setOperatingStatus
+                            (
+                                bool mode
+                            ) 
+                            external ;
+
+    function registerAirline
+                            (   
+                                address airline
+                            )
+                            external; 
+
+}
