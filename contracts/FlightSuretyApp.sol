@@ -16,6 +16,7 @@ contract FlightSuretyApp {
     /*                                       DATA VARIABLES                                     */
     /********************************************************************************************/
 
+     
     // Flight status codees
     uint8 private constant STATUS_CODE_UNKNOWN = 0;
     uint8 private constant STATUS_CODE_ON_TIME = 10;
@@ -24,10 +25,22 @@ contract FlightSuretyApp {
     uint8 private constant STATUS_CODE_LATE_TECHNICAL = 40;
     uint8 private constant STATUS_CODE_LATE_OTHER = 50;
 
+    // uint constant M =  2 ;                              // For Multiparty signature 
+    address[] multiCalls = new address[](0);            //To track multiparty siggnature
+    
+    mapping (address => address[]) public endorsement;           // Which airline endorsed whom
+    uint public minimumEndorsement ;                              //min endorsement required
+    uint public endorsementRequired ;                            //Num endorsement required for registration
+    //mapping (address=> uint) public endorsementCount ;         // To track the number of endorsement of an airline for Registration
+
+    uint public minimumFund = 10 ether;                     // minimum funding amount by an airline
+
     
     address private contractOwner;          // Account used to deploy contract
 
     FlightSuretyData flightSuretyData ;     // Access the Data contract
+
+    mapping (address=> uint) airlineFeePaid ;               // Fee paid by an airline
 
     struct Flight {
         bool isRegistered;
@@ -36,16 +49,8 @@ contract FlightSuretyApp {
         address airline;
     }
 
-    /* About Mapping in solidity
-    Mapping can be interpreted as sort of hash tables that are initialized virtually 
-    so that each potential key exists and is mapped to a value, whose byte-representation consists of zeroes only.
-    However, differently from hash tables, the key data is not stored in the mapping. 
-    Instead, only its kecak256 hash used for storing the value is.
-    Mapping types have to be declared using mapping(_KeyType => _ValueType).
-    */
     mapping(bytes32 => Flight) private flights;
 
-   
 
  
     /********************************************************************************************/
@@ -76,6 +81,62 @@ contract FlightSuretyApp {
         _;
     }
 
+    /**
+    * @dev Modifier that requires an airline to be registered
+    */
+    modifier requireIsRegistered() {
+        require(
+            flightSuretyData.isRegistered(msg.sender),
+            "Airline must be registered before being able to perform this action"
+        );
+        _;
+    }
+
+        /**
+    * @dev Modifier that requires an airline to be registered
+    */
+    modifier requireHasPaidFee() {
+        require(
+            flightSuretyData.hasPaidFee(msg.sender),
+            "Airline must fund before able to perform this action"
+        );
+        _;
+    }
+
+
+    /**
+    * @dev Modifier that checks if an airline has sufficient funs
+    */
+    modifier requireSufficientFund() {
+        require(msg.value >= minimumFund, "Minimun funding amount is 10 ETH");
+        _;
+    }
+
+
+    /**
+    * @dev Modifier to check for multisig Criteria
+    */
+    modifier requireMultiSigCheck(){
+    //    require(minimumSigReq > flightSuretyData.numRegisteredAirline().div(2), "Multi Signature Failed");
+
+        bool isDuplicate = false ; //To avoid duplicate voting
+        for(uint c= 0; c < multiCalls.length; c++) {
+            if (multiCalls[c] == msg.sender){
+                isDuplicate = true;
+                break;
+            }
+        }
+        require(!isDuplicate, "Caller has already called this function");
+        multiCalls.push(msg.sender);
+
+        if(multiCalls.length > flightSuretyData.numRegisteredAirline().div(2)){
+            _;   
+            multiCalls = new address[](0);
+        }
+       
+    }
+
+
     /********************************************************************************************/
     /*                                       CONSTRUCTOR                                        */
     /********************************************************************************************/
@@ -92,6 +153,8 @@ contract FlightSuretyApp {
     {
         contractOwner = msg.sender;
         flightSuretyData = FlightSuretyData(dataContract);
+        //endorsement[firstAirline] = msg.sender; // endorsement of the first airline by the contract owner
+
     }
 
     /********************************************************************************************/
@@ -100,10 +163,25 @@ contract FlightSuretyApp {
 
     function isOperational() 
                             public 
-                            pure 
+                            view 
                             returns(bool) 
     {
-        return true;  // Modify to call data contract's status
+        return (flightSuretyData.isOperational());  // Modify to call data contract's status
+    }
+
+     /**
+    * @dev Sets contract operations on/off
+    *
+    * When operational mode is disabled, all write transactions except for this one will fail
+    */    
+    function setOperatingStatus
+                            (
+                                bool mode
+                            ) 
+                            external
+                            requireMultiSigCheck
+    {
+      flightSuretyData.setOperatingStatus(mode);
     }
 
     /********************************************************************************************/
@@ -116,13 +194,53 @@ contract FlightSuretyApp {
     *
     */   
     function registerAirline
-                            (   
+                            (  
+                                address newAirline
                             )
+                            requireIsRegistered
+                            requireHasPaidFee
                             external
-                            pure
-                            returns(bool success, uint256 votes)
+                           
+    {       
+        // only first Airline can register a new airline when less than 4 airlines are registered
+        if (flightSuretyData.numRegisteredAirline() < 4) {
+           flightSuretyData.registerAirline(newAirline,msg.sender);
+        } else {
+
+            bool endorsed = false;
+
+            for (uint i=0; i < endorsement[newAirline].length; i++) {
+                if (endorsement[newAirline][i] == msg.sender) {
+                    endorsed = true;
+                    break;
+                }
+            }
+            require(!endorsed, "The endorser has already endorsed once");
+            endorsement[newAirline].push(msg.sender) ; // Add the endorsement in the endorsement table
+
+            minimumEndorsement = flightSuretyData.numRegisteredAirline().div(2);
+            endorsementRequired = minimumEndorsement.sub(endorsement[newAirline].length);  
+
+            if (endorsementRequired == 0) {
+                endorsement[newAirline] = new address[](0);
+                flightSuretyData.registerAirline(newAirline,msg.sender);  
+            }
+        }
+        
+    }
+
+    /**
+    * @dev To provide fund (more than minimum ) by an airline
+    *
+    */ 
+    function fund() 
+        external
+        requireIsOperational
+        requireIsRegistered
+        requireSufficientFund
+        payable
     {
-        return (success, 0);
+        flightSuretyData.fund.value(msg.value)(msg.sender);
     }
 
 
@@ -351,18 +469,56 @@ contract FlightSuretyApp {
 
 }  
 
+
+/***************************************************** */
+// FlightSuretyData Interface Contract
+/**************************************************** */
+
 contract FlightSuretyData {
 
-    function setOperatingStatus
-                            (
-                                bool mode
-                            ) 
+    struct Airline{
+        bool registered; 
+        bool feePaid;
+    }                                                   // Struct variable to capture status of an airlien
+    mapping (address=> Airline) public airlines;        // This is list of registered airlines
+    uint256 public numRegisteredAirline ;            // To find the number of Registered Airline
+
+   function isOperational() public view returns(bool) ;
+
+   function setOperatingStatus (bool mode) external ;
+ 
+   function isRegistered(address airlineAddress) external view returns (bool); 
+
+   function hasPaidFee(address airlineAddress) external view returns (bool);
+
+   function registerAirline (  
+                                address newAirline,
+                                address endorsingAirline
+                            )
                             external ;
 
-    function registerAirline
-                            (   
-                                address airline
-                            )
-                            external; 
+   function fund (address fundingAddress) public payable;
+
+    // function registerFlight
+    // (
+    //     uint takeOff,
+    //     uint landing,
+    //     string flightRef,
+    //     uint price,
+    //     string from,
+    //     string to,
+    //     address originAddress
+    // )
+    // external;
+
+    // function book(bytes32 flightKey, uint amount, address originAddress) external payable;
+    // function pay(address originAddress) external;
+    // function processFlightStatus(bytes32 flightKey, uint8 status)  external;
+    // function getFlightPrice(bytes32 flightKey) external view returns (uint);
+    // function hasFunded(address airlineAddress) external view returns (bool);
+    // function isRegistered(address airlineAddress) external view returns (bool);
+    // function registeredAirlinesCount() external view returns (uint);
+    // function firstAirline() external view returns (address);
+
 
 }

@@ -9,23 +9,23 @@ contract FlightSuretyData {
     /*                                       DATA VARIABLES                                     */
     /********************************************************************************************/
 
-    uint constant M =  1 ;                              // For Multiparty signature 
-    mapping(address => uint256) authorizedCaller;        //Only Authorised Contract (i.e. App contract) can change this
+    mapping(address => bool) authorizedCaller;          //Only Authorised Contract  can change this
+
     uint256 private enabled = block.timestamp ;         //This is to use ratelimiting on functions
+
     uint256 private counter = 1;                        // This is for Re-entrancy guard
 
     address private contractOwner;                      // Account used to deploy contract
     bool private operational = true;                    // Blocks all state changes throughout the contract if false
     
- 
-    mapping (address=> uint) airlines;                  // This is list of registered airlines
-    mapping (address=> uint) airlineFee ;               // Fee paid by an airline
-    uint256 numRegisteredAirline = 0;                   // To find the number of Registered Airline
-    mapping (address => address) endorsement;           // Which airline endorsed whom
-    mapping (address=> uint) endorsementCount ;         // To track the number of endorsement of an airline for Registration
-    
-
-    address[] multiCalls = new address[](0);                //To track multiparty siggnature
+    struct Airline{
+        bool registered; 
+        bool feePaid;
+    }                                                   // Struct variable to capture status of an airlien
+    mapping (address=> Airline) public airlines;        // This is list of registered airlines
+    uint256 public numRegisteredAirline ;            // To find the number of Registered Airline
+   
+   
 
     /********************************************************************************************/
     /*                                       EVENT DEFINITIONS                                  */
@@ -43,21 +43,28 @@ contract FlightSuretyData {
                                 public 
     {
         contractOwner = msg.sender;
-        authorizedCaller[msg.sender] = 1;
-        airlines[firstAirline] = 1;
-        numRegisteredAirline++ ;
-        endorsement[firstAirline] = msg.sender; // endorsement of the first airline by the contract owner
 
+        
+        authorizedCaller[msg.sender] = true; // Authorize the contract owner
+
+        // first airline registration during deployment
+        airlines[firstAirline].registered = true;
+        numRegisteredAirline = 1  ; //First Airline registered
+        
     }
 
     /**
     * @dev Event after airline is registered
     *      
     */
-    event airlineRegistered(
-        address airline
-    );
+    event airlineRegistered(address newAirline, address endorsingAirline);
 
+    /**
+    * @dev Event after airline has provide fund
+    *      
+    */
+    event providedFund(address fundingAddress);
+   
     /********************************************************************************************/
     /*                                       FUNCTION MODIFIERS                                 */
     /********************************************************************************************/
@@ -90,10 +97,11 @@ contract FlightSuretyData {
     */
     modifier requireIsCallerAuthorized()
     {
-        require(authorizedCaller[msg.sender] == 1, "Caller is not authorized");
+        require(authorizedCaller[msg.sender] == true, "Caller is not authorized");
         _;
     }
 
+ 
     /**
     * @dev Modifier for rate limititng a function
     */
@@ -112,6 +120,7 @@ contract FlightSuretyData {
         _;
         require(guard == counter, "This is not allowed");
     }
+
 
     /********************************************************************************************/
     /*                                       UTILITY FUNCTIONS                                  */
@@ -141,26 +150,12 @@ contract FlightSuretyData {
                                 bool mode
                             ) 
                             external
-                            requireContractOwner
+                            //requireContractOwner
     {
-        require(mode != operational, "New Mode must be different than exisitng mode");
-        require(authorizedCaller[msg.sender] == 1, "The user is not authorized");
-
-        bool isDuplicate = false ; //To avoid duplicate voting
-        for(uint c= 0; c < multiCalls.length; c++) {
-            if (multiCalls[c] == msg.sender){
-                isDuplicate = true;
-                break;
-            }
-        }
-
-        require(!isDuplicate, "Caller has already called this function");
-        multiCalls.push(msg.sender);
-
-        if(multiCalls.length >= M){
-            operational = mode;
-            multiCalls = new address[](0);
-        }
+        //require(mode != operational, "New Mode must be different than exisitng mode");
+        require(authorizedCaller[msg.sender] == true, "The user is not authorized");
+        operational = mode;
+       
     }
 
     /**
@@ -168,8 +163,8 @@ contract FlightSuretyData {
     *
     * When a contract is not authhorized it cannot make changes to this contract
     */ 
-    function authorizeCaller (address dataContract) external requireContractOwner {
-        authorizedCaller[dataContract] = 1;
+    function authorizeCaller (address caller) external requireContractOwner {
+        authorizedCaller[caller] = true;
     }
 
     /**
@@ -177,8 +172,36 @@ contract FlightSuretyData {
     *
     * When a contract is not authhorized i.e it has an upgraded the previous version is deleted so that its not authorized. 
     */ 
-    function deAuthorizedCaller (address dataContract) external requireContractOwner {
-        delete authorizedCaller[dataContract]; 
+    function deAuthorizedCaller (address caller) external requireContractOwner {
+        delete authorizedCaller[caller]; 
+    }
+
+    /**
+    * @dev DeAuthorize  a contract to make any changes
+    *
+    * When a contract is not authhorized i.e it has an upgraded the previous version is deleted so that its not authorized. 
+    */ 
+    function isAuthorizedCaller (address caller) external returns (bool) {
+        return authorizedCaller[caller]; 
+    }
+
+
+
+     /**
+    * @dev This function returns a Boolean whether an airline has paid fee or not
+    **/
+    function hasPaidFee(address airlineAddress) external view returns (bool feePaid)
+    {
+        feePaid = airlines[airlineAddress].feePaid;
+    }
+
+
+     /**
+    * @dev This function returns a Boolean whether an airline is registered or 
+    **/
+    function isRegistered(address airlineAddress) external view returns (bool isRegistered)
+    {
+        isRegistered = airlines[airlineAddress].registered;
     }
 
     /********************************************************************************************/
@@ -197,29 +220,18 @@ contract FlightSuretyData {
                             )
                             external
                             requireIsOperational
-                            
+                            requireIsCallerAuthorized
+                          
     {
-        // means there needs to be a persistent mapping of airline
-        //its should be mapping of an address belonging to an airline
+                
+        require(airlines[endorsingAirline].registered == true, "The Endorser is not a Registered airlines");
+        require(airlines[endorsingAirline].feePaid == true, "The Endorser has not paid the fee");
+
+        airlines[newAirline].registered = true ;
+        airlines[newAirline].feePaid = false ;
+        numRegisteredAirline = numRegisteredAirline.add(1) ; 
+        emit airlineRegistered(newAirline,endorsingAirline);     //  emit an airline registered event
         
-        require(airlines[endorsingAirline] == 1, "The Endorser is not a Registered airlines");
-        require(endorsement[newAirline] == endorsingAirline, "The endorser has already endorsed once"); 
-
-        endorsementCount[newAirline] = endorsementCount[newAirline].add(1); //Increase the endorsementcount by 1
-
-        uint minimumEndorsement = numRegisteredAirline.div(2);
-        
-        if(numRegisteredAirline >4 && endorsementCount[newAirline] >= minimumEndorsement) {
-            airlines[newAirline] = 1 ;
-            numRegisteredAirline++ ; 
-            emit airlineRegistered(newAirline);     //  emit an airline registered event
-        }
-
-        if(numRegisteredAirline <4) {
-            airlines[newAirline] = 1 ;
-            numRegisteredAirline++ ; 
-            emit airlineRegistered(newAirline);     //  emit an airline registered event
-        }
     }
 
     /**
@@ -234,12 +246,7 @@ contract FlightSuretyData {
                             returns (bool)
                             
     {
-        if(airlines[airline] == 1){
-            return true; 
-        } else {
-            return false; 
-        }
-    
+       return airlines[airline].registered ; 
     }
 
 
@@ -287,11 +294,16 @@ contract FlightSuretyData {
     *
     */   
     function fund
-                            (   
+                            ( 
+                                address fundingAddress  
                             )
                             public
+                            requireIsOperational
+                            requireIsCallerAuthorized
                             payable
     {
+        airlines[fundingAddress].feePaid = true;
+        emit providedFund(fundingAddress);
     }
 
     function getFlightKey
@@ -317,7 +329,7 @@ contract FlightSuretyData {
     {
         
         require(msg.data.length == 0, "this is not allowed");
-        fund();
+        fund(msg.sender);
     }
 
 
