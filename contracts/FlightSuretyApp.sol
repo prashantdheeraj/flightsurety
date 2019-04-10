@@ -42,16 +42,6 @@ contract FlightSuretyApp {
 
     mapping (address=> uint) airlineFeePaid ;               // Fee paid by an airline
 
-    struct Flight {
-        bool isRegistered;
-        uint8 statusCode;
-        uint256 updatedTimestamp;        
-        address airline;
-    }
-
-    mapping(bytes32 => Flight) private flights;
-
-
  
     /********************************************************************************************/
     /*                                       FUNCTION MODIFIERS                                 */
@@ -103,7 +93,6 @@ contract FlightSuretyApp {
         _;
     }
 
-
     /**
     * @dev Modifier that checks if an airline has sufficient funs
     */
@@ -111,6 +100,34 @@ contract FlightSuretyApp {
         require(msg.value >= minimumFund, "Minimun funding amount is 10 ETH");
         _;
     }
+
+    /**
+    * @dev Modifier the checks if insurance amount is within the lower and upper limit
+    */
+
+      modifier requireAmountWithinLimits(uint amount, uint lowerLimit, uint upperLimit) {
+        require(amount < upperLimit, "Value higher than max not allowed");
+        require(amount > lowerLimit, "Value lower than min not allowed");
+        _;
+    }
+
+     /**
+    * @dev Modifier the checks if the amount paid is more than the insurance premium
+    */
+    modifier requireMoreThanInsurancePremium(uint insurancePremium) {
+        require(msg.value >= insurancePremium, "Value sent does not cover the price!");
+        _;
+    }
+
+     /**
+    * @dev Modifier the checks if the amount paid is more than the insurance premium
+    */
+    modifier requireAmountReturnCheck(uint ticketCost) {
+        uint amountToReturn = msg.value - ticketCost;
+        msg.sender.transfer(amountToReturn);
+        _;
+    }
+
 
 
     /**
@@ -156,6 +173,10 @@ contract FlightSuretyApp {
         //endorsement[firstAirline] = msg.sender; // endorsement of the first airline by the contract owner
 
     }
+
+    event flightRegistered(address airline, string flightCode, uint landTime);
+    event flightProcessed(string flightCode, string destination, uint timestamp, uint8 statusCode);
+    event amountClaimed(address beneficiary);
 
     /********************************************************************************************/
     /*                                       UTILITY FUNCTIONS                                  */
@@ -248,29 +269,107 @@ contract FlightSuretyApp {
     * @dev Register a future flight for insuring.
     *
     */  
-    function registerFlight
-                                (
-                                )
-                                external
-                                pure
+   function registerFlight
+    (
+        bool isRegistered,
+        uint status,
+        string flightCode,
+        string origin,
+        string destination,
+        uint startTime,
+        uint landTime,        
+        uint ticketCost
+        
+    )
+    external
+    requireIsOperational
+    requireHasPaidFee
     {
 
+        flightSuretyData.registerFlight(
+            isRegistered,
+            status,
+            flightCode,
+            origin,
+            destination,
+            startTime,
+            landTime,
+            ticketCost, 
+            msg.sender
+        );
+        emit flightRegistered(msg.sender , flightCode, landTime);
     }
+
+    function getFlightIdentifier
+                        (
+                            string flightCode,
+                            string destination,
+                            uint256 landTime
+                        )
+                        view
+                        internal
+                        returns(bytes32) 
+    {
+        return flightSuretyData.getFlightIdentifier(flightCode,destination,landTime);
+    }
+
+
+ 
+    /**
+    * @dev Buy insurance for a flight
+    *
+    */  
+
+    function bookTicketAndBuyInsurance
+                        (
+                            string flightCode,
+                            string destination,
+                            uint landTime,
+                            uint amountPaid                            
+                        )
+                        external
+                        requireAmountWithinLimits(amountPaid, 0, 1.05 ether) // +0.05 to cover gas costs
+                        requireMoreThanInsurancePremium(flightSuretyData.getFlightPrice(getFlightIdentifier(flightCode, destination, landTime)).add(amountPaid))
+                        requireAmountReturnCheck(flightSuretyData.getFlightPrice(getFlightIdentifier(flightCode, destination, landTime)).add(amountPaid))
+                        requireIsOperational
+                        payable
+            {
+                bytes32 flightKey= flightSuretyData.getFlightIdentifier(flightCode, destination, landTime);
+                flightSuretyData.bookTicketAndBuyInsurance.value(msg.value)(flightKey, amountPaid, msg.sender);          
+            }
+
+    /**
+    * @dev CAmount claimed by the beneficiary (Passeneger or an airline)
+    *
+    */  
+    function claimAmount()
+    external
+    requireIsOperational
+    {
+        flightSuretyData.pay(msg.sender);
+        emit amountClaimed(msg.sender);
+    }
+
+   
     
    /**
     * @dev Called after oracle has updated flight status
     *
     */  
     function processFlightStatus
-                                (
-                                    address airline,
-                                    string memory flight,
-                                    uint256 timestamp,
-                                    uint8 statusCode
-                                )
-                                internal
-                                pure
+    (
+        string flightCode,
+        string destination,
+        uint256 timestamp,
+        uint8 statusCode
+    )
+    internal
+    requireIsOperational
     {
+        // generate flightIdentifier
+        bytes32 flightIdentifier = getFlightIdentifier(flightCode, destination, timestamp);
+        flightSuretyData.processFlightStatus(flightIdentifier, statusCode);
+        emit flightProcessed(flightCode, destination, timestamp, statusCode);
     }
 
 
@@ -294,6 +393,7 @@ contract FlightSuretyApp {
 
         emit OracleRequest(index, airline, flight, timestamp);
     } 
+
 
 
 // region ORACLE MANAGEMENT
@@ -330,9 +430,9 @@ contract FlightSuretyApp {
     mapping(bytes32 => ResponseInfo) private oracleResponses;
 
     // Event fired each time an oracle submits a response
-    event FlightStatusInfo(address airline, string flight, uint256 timestamp, uint8 status);
+    event FlightStatusInfo( string flight, string destination,  uint256 timestamp, uint8 status);
 
-    event OracleReport(address airline, string flight, uint256 timestamp, uint8 status);
+    event OracleReport( string flight, string destination, uint256 timestamp, uint8 status);
 
     // Event fired when flight status request is submitted
     // Oracles track this and if they have a matching index
@@ -380,8 +480,8 @@ contract FlightSuretyApp {
     function submitOracleResponse
                         (
                             uint8 index,
-                            address airline,
                             string flight,
+                            string destination,
                             uint256 timestamp,
                             uint8 statusCode
                         )
@@ -390,37 +490,25 @@ contract FlightSuretyApp {
         require((oracles[msg.sender].indexes[0] == index) || (oracles[msg.sender].indexes[1] == index) || (oracles[msg.sender].indexes[2] == index), "Index does not match oracle request");
 
 
-        bytes32 key = keccak256(abi.encodePacked(index, airline, flight, timestamp)); 
+        bytes32 key = keccak256(abi.encodePacked(flight, destination, timestamp)); 
         require(oracleResponses[key].isOpen, "Flight or timestamp do not match oracle request");
 
         oracleResponses[key].responses[statusCode].push(msg.sender);
 
         // Information isn't considered verified until at least MIN_RESPONSES
         // oracles respond with the *** same *** information
-        emit OracleReport(airline, flight, timestamp, statusCode);
+        emit OracleReport(flight, destination, timestamp, statusCode);
         if (oracleResponses[key].responses[statusCode].length >= MIN_RESPONSES) {
 
-            emit FlightStatusInfo(airline, flight, timestamp, statusCode);
+            emit FlightStatusInfo(flight, destination, timestamp, statusCode);
 
             // Handle flight status as appropriate
-            processFlightStatus(airline, flight, timestamp, statusCode);
+            processFlightStatus(flight, destination, timestamp, statusCode);
         }
     }
 
 
-    function getFlightKey
-                        (
-                            address airline,
-                            string flight,
-                            uint256 timestamp
-                        )
-                        pure
-                        internal
-                        returns(bytes32) 
-    {
-        return keccak256(abi.encodePacked(airline, flight, timestamp));
-    }
-
+    
     // Returns array of three non-duplicating integers from 0-9
     function generateIndexes
                             (                       
@@ -499,26 +587,40 @@ contract FlightSuretyData {
 
    function fund (address fundingAddress) public payable;
 
-    // function registerFlight
-    // (
-    //     uint takeOff,
-    //     uint landing,
-    //     string flightRef,
-    //     uint price,
-    //     string from,
-    //     string to,
-    //     address originAddress
-    // )
-    // external;
+    function registerFlight (
+        bool isRegistered,
+        uint statusCode,
+        string flightCode,
+        string origin,
+        string destination,
+        uint startTime,
+        uint landTime,
+        uint ticketCost,
+        address airlineAddress
+    )  external; 
 
-    // function book(bytes32 flightKey, uint amount, address originAddress) external payable;
-    // function pay(address originAddress) external;
-    // function processFlightStatus(bytes32 flightKey, uint8 status)  external;
-    // function getFlightPrice(bytes32 flightKey) external view returns (uint);
-    // function hasFunded(address airlineAddress) external view returns (bool);
-    // function isRegistered(address airlineAddress) external view returns (bool);
-    // function registeredAirlinesCount() external view returns (uint);
-    // function firstAirline() external view returns (address);
+    function getFlightIdentifier 
+                        (
+                            string flightCode,
+                            string destination,
+                            uint256 landTime
+                        )
+                        pure
+                        external
+                        returns(bytes32);
 
+    function getFlightPrice(bytes32 flightIdentifier) external view returns (uint) ;
 
-}
+    function bookTicketAndBuyInsurance
+                        (
+                                bytes32 flightIdentifier, 
+                                uint insuranceAmount, 
+                                address passengerAddress                             
+                        )
+                        external
+                        payable  ;  
+
+    function pay(address beneficiary) external;
+   
+    function processFlightStatus(bytes32 flightKey, uint8 status)  external;
+ }

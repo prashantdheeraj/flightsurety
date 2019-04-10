@@ -1,22 +1,28 @@
-
-var Test = require('../config/testConfig.js');
-var BigNumber = require('bignumber.js');
+const Test = require('../config/testConfig.js');
+const truffleAssert = require('truffle-assertions');
+var BigNumber = require('bignumber.js')
 
 contract('Flight Surety Tests', async (accounts) => {
 
-  var config;
+   var config;
 
   // Operations and Settings
 
-  const minFund = web3.utils.toWei('10', 'ether')               // Note: .toWei() returns a string
-  const insurancePayment = web3.utils.toWei('0.1', 'ether')     // Note .toWei() returns a string
-  const ticketPrice = web3.utils.toWei('0.5', 'ether')          // Note .toWei() returns a string
-  const takeOff = Math.floor(Date.now() / 1000) + 1000
-  const landing = takeOff + 1000
-  const from = 'HAM'
-  const to = 'PAR'
-  const flightRef = 'AF0187'
+  const minFund = web3.utils.toWei('10', 'ether');               // Note: .toWei() returns a string
 
+  const flightRegistered = true;
+  const flightStatus = 0;
+  const flightCode = '9W347';
+  const origin = 'DEL';
+  const destination = 'BOM';
+
+
+  const startTime = Math.floor(Date.now() / 100000) + 10000000000000;
+  const landTime = startTime + 150000 ;
+  const ticketCost = web3.utils.toWei('1', 'ether');          // Note .toWei() returns a string
+
+  const insurancePayment = web3.utils.toWei('0.2', 'ether') ;    // Note .toWei() returns a string
+  
 
   before('setup contract', async () => {
     config = await Test.Config(accounts);
@@ -162,7 +168,7 @@ contract('Flight Surety Tests', async (accounts) => {
 
   });
   
-  //TEST: FAILED
+  //TEST: PASSED
   it('Can allow a new airline to register only if 50% registered airline endorse.', async () => {
     // register 2 new airlines and fund it
     await config.flightSuretyApp.registerAirline( accounts[3], { from: config.firstAirline })
@@ -224,26 +230,12 @@ contract('Flight Surety Tests', async (accounts) => {
   })
 
 
-  //TEST : 6 (Failed)
+  //TEST : Passed
   it('function call is made when multi-party threshold is reached', async () => {
-
-    // //ARRANGE
-    // let admin1 = accounts[2];
-    // let admin2 = accounts[3];
-    // let admin3 = accounts[4];
-
-    // // await config.flightSuretyApp.registerAirline(admin1, true, {from: config.owner});
-    // // await config.flightSuretyApp.registerAirline(admin2, true, {from: config.owner});
-    // // await config.flightSuretyApp.registerAirline(admin3, true, {from: config.owner});
-
-    // await config.flightSuretyApp.registerAirline(admin1,  {from: config.owner});
-    // await config.flightSuretyApp.registerAirline(admin2,  {from: config.owner});
-    // await config.flightSuretyApp.registerAirline(admin3,  {from: config.owner});
-
     let startStatus = await config.flightSuretyApp.isOperational.call();
-    console.log("The start status is: " + startStatus);
+    //console.log("The start status is: " + startStatus);
     let changeStatus = !startStatus;
-    console.log("The change status for testing is: " + changeStatus);
+    //console.log("The change status for testing is: " + changeStatus);
 
     //ACT
     await config.flightSuretyApp.setOperatingStatus(changeStatus, {from: accounts[2]});
@@ -252,11 +244,71 @@ contract('Flight Surety Tests', async (accounts) => {
     await config.flightSuretyApp.setOperatingStatus(changeStatus, {from: accounts[5]});
 
     let newStatus = await config.flightSuretyApp.isOperational.call();
-    console.log("The new status is: " + newStatus);
+    //console.log("The new status is: " + newStatus);
 
     //ASSERT
     assert.equal(changeStatus, newStatus, "Multi-Party call failed");
+
+    //Change back to original sataus
+    await config.flightSuretyApp.setOperatingStatus(startStatus, {from: accounts[2]});
+    await config.flightSuretyApp.setOperatingStatus(startStatus, {from: accounts[3]});
+    await config.flightSuretyApp.setOperatingStatus(startStatus, {from: accounts[4]});
+    await config.flightSuretyApp.setOperatingStatus(startStatus, {from: accounts[5]});
   });
+
+  //TEST : 
+  it('Can register a flight', async () => {
+    const tx = await config.flightSuretyApp.registerFlight(
+      flightRegistered,
+      flightStatus,
+      flightCode,
+      origin,
+      destination,
+      startTime,
+      landTime,
+      ticketCost,  
+      { from: config.firstAirline })
+
+    const flightIdentifier = await config.flightSuretyData.getFlightIdentifier(flightCode, destination,landTime);
+    // console.log(flightIdentifier);
+    const flight = await config.flightSuretyData.flights.call(flightIdentifier)
+    assert(flight.isRegistered, 'Error: flight was not registered')
+    assert.equal(flight.ticketCost, ticketCost)
+    truffleAssert.eventEmitted(tx, 'flightRegistered', ev => {
+      return ev.flightCode === flightCode
+    });
+  });
+
+  it(' Can allow a passenger to book tikcet and buy an insurance', async () => {
+    await config.flightSuretyApp.bookTicketAndBuyInsurance(
+      flightCode,
+      destination,
+      landTime,
+      insurancePayment,
+      {
+        from: accounts[9],
+        value: +ticketCost + +insurancePayment 
+      }
+    )
+    const flightIdentifier = await config.flightSuretyData.getFlightIdentifier( flightCode, destination, landTime);
+    //console.log(flightIdentifier);
+    const flight = await config.flightSuretyData.flights.call(flightIdentifier);
+    //console.log(flight)
+    assert(await config.flightSuretyData.hasPurchasedFlightTicket(flightCode, destination, landTime, accounts[9]), "booking not successful");
+    let amountPaid = await config.flightSuretyData.hasPurchasedInsurance(flightCode, destination, landTime, accounts[9]);
+    amountPaid = parseInt(web3.utils.fromWei(amountPaid, "wei"))
+    assert.equal(amountPaid, insurancePayment, "insurance amount not correct");
+  })
+
+  it('can allow airline/Passenger to withdraw their credited amount ', async () => {
+    balanceBefore = await web3.eth.getBalance(config.firstAirline)
+    tx = await config.flightSuretyApp.claimAmount({ from: config.firstAirline })
+    balanceAfter = await web3.eth.getBalance(config.firstAirline)
+    assert(+balanceBefore < +balanceAfter, 'Airline withdrawal failed')
+    truffleAssert.eventEmitted(tx, 'amountClaimed', ev => {
+      return ev.beneficiary === config.firstAirline
+    })
+  })
  
 
 });
