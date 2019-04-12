@@ -72,8 +72,11 @@ contract FlightSuretyData {
         authorizedCaller[msg.sender] = true; // Authorize the contract owner
 
         // first airline registration during deployment
+        airlines[msg.sender].registered = true; // Register the contract owner in airlines mapping to make it work from DAPP. The request sender must be registered.
+        airlines[msg.sender].feePaid = true;
+        
         airlines[firstAirline].registered = true;
-        numRegisteredAirline = 1  ; //First Airline registered
+        numRegisteredAirline = 1  ; //First Airline registered. Do not count the contract owner
         
     }
 
@@ -246,7 +249,7 @@ contract FlightSuretyData {
     *
     * When a contract is not authhorized i.e it has an upgraded the previous version is deleted so that its not authorized. 
     */ 
-    function isAuthorizedCaller (address caller) external returns (bool) {
+    function isAuthorizedCaller (address caller) public view  returns (bool) {
         return authorizedCaller[caller]; 
     }
 
@@ -319,7 +322,7 @@ contract FlightSuretyData {
                             )
                             external
                             requireIsOperational
-                            requireIsCallerAuthorized
+                            //requireIsCallerAuthorized
                           
     {
                 
@@ -350,7 +353,7 @@ contract FlightSuretyData {
     )
     external
     requireIsOperational
-    requireIsCallerAuthorized
+    //requireIsCallerAuthorized
     {
         require(startTime > now, "The Flight time has to be in future");
         require(landTime > startTime, "The lading time is earlier than the takeoff time");
@@ -400,7 +403,7 @@ contract FlightSuretyData {
                             )
                             external
                             requireIsOperational
-                            requireIsCallerAuthorized
+                            //requireIsCallerAuthorized
                             requireIsFlightRegistered(flightIdentifier)
                             payable
     {
@@ -485,7 +488,7 @@ contract FlightSuretyData {
     function pay(address beneficiary)
     external
     requireIsOperational
-    requireIsCallerAuthorized
+    //requireIsCallerAuthorized
     {
         // Check-Effect-Interaction pattern to protect against re entrancy attack
         // Check
@@ -509,7 +512,7 @@ contract FlightSuretyData {
                             )
                             public
                             requireIsOperational
-                            requireIsCallerAuthorized
+                            //requireIsCallerAuthorized
                             payable
     {
         airlines[fundingAddress].feePaid = true;
@@ -529,7 +532,7 @@ contract FlightSuretyData {
     external
     requireIsFlightRegistered(flightIdentifier)
     requireIsOperational
-    requireIsCallerAuthorized
+    //requireIsCallerAuthorized
     requiredNotProcessesForPayment(flightIdentifier)
     {
         // Check (modifiers)

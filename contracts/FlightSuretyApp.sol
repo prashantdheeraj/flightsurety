@@ -250,6 +250,21 @@ contract FlightSuretyApp {
         
     }
 
+     /**
+    * @dev Number of endorsement left for registration
+    *
+    */
+
+    function endorsementNeeded(address newAirline)
+    public
+    view
+    returns (uint additionalEndorsement)
+    {
+        uint endorsementreceived = endorsement[newAirline].length;
+        uint threshold = flightSuretyData.numRegisteredAirline().div(2);
+        additionalEndorsement = threshold.sub(endorsementreceived);
+    }
+
     /**
     * @dev To provide fund (more than minimum ) by an airline
     *
@@ -335,7 +350,7 @@ contract FlightSuretyApp {
                         payable
             {
                 bytes32 flightKey= flightSuretyData.getFlightIdentifier(flightCode, destination, landTime);
-                flightSuretyData.bookTicketAndBuyInsurance.value(msg.value)(flightKey, amountPaid, msg.sender);          
+                flightSuretyData.bookTicketAndBuyInsurance.value(msg.value)(flightKey, amountPaid.mul(3).div(2), msg.sender);          
             }
 
     /**
@@ -381,6 +396,7 @@ contract FlightSuretyApp {
                             uint256 timestamp                            
                         )
                         external
+                        returns (bytes32)
     {
         uint8 index = getRandomIndex(msg.sender);
 
@@ -392,6 +408,7 @@ contract FlightSuretyApp {
                                             });
 
         emit OracleRequest(index, airline, flight, timestamp);
+        return key;
     } 
 
 
@@ -429,6 +446,9 @@ contract FlightSuretyApp {
     // Key = hash(index, flight, timestamp)
     mapping(bytes32 => ResponseInfo) private oracleResponses;
 
+    // Event fired each time an oracle is registered
+    event OracleRegistered(uint8[3] indexes);
+
     // Event fired each time an oracle submits a response
     event FlightStatusInfo( string flight, string destination,  uint256 timestamp, uint8 status);
 
@@ -456,6 +476,7 @@ contract FlightSuretyApp {
                                         isRegistered: true,
                                         indexes: indexes
                                     });
+        emit OracleRegistered(indexes);
     }
 
     function getMyIndexes
@@ -498,6 +519,7 @@ contract FlightSuretyApp {
         // Information isn't considered verified until at least MIN_RESPONSES
         // oracles respond with the *** same *** information
         emit OracleReport(flight, destination, timestamp, statusCode);
+        
         if (oracleResponses[key].responses[statusCode].length >= MIN_RESPONSES) {
 
             emit FlightStatusInfo(flight, destination, timestamp, statusCode);

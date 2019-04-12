@@ -297,7 +297,7 @@ contract('Flight Surety Tests', async (accounts) => {
     assert(await config.flightSuretyData.hasPurchasedFlightTicket(flightCode, destination, landTime, accounts[9]), "booking not successful");
     let amountPaid = await config.flightSuretyData.hasPurchasedInsurance(flightCode, destination, landTime, accounts[9]);
     amountPaid = parseInt(web3.utils.fromWei(amountPaid, "wei"))
-    assert.equal(amountPaid, insurancePayment, "insurance amount not correct");
+    assert.equal(amountPaid, insurancePayment* 3 / 2, "insurance amount not correct");
   })
 
   it('can allow airline/Passenger to withdraw their credited amount ', async () => {
